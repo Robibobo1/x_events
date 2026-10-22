@@ -32,6 +32,9 @@ namespace x {
     // default empty implementation
     virtual State processEventsMeasurement(const x::EventArray::ConstPtr &events_ptr,
                                            TiledImage &tracker_img, TiledImage &feature_img) { return x::State(); };
+
+    // world coordinates of the SLAM features of the most recent state, e.g. for logging
+    virtual std::vector<Vector3> computeSLAMCartesianFeaturesForState(const State &state) = 0;
   };
 
 }
