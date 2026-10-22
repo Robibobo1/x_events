@@ -184,6 +184,13 @@ void TiledImage::setTileForFeature(Feature& feature) const
     r -= tile_height_;
   }
 
+  // Features outside the image (e.g. EKLT tracks drifting past the border) would otherwise produce out-of-range
+  // tile indexes (row underflows as unsigned) that are used to index per-tile arrays: clamp them to the grid.
+  if (col >= n_tiles_w_)
+    col = n_tiles_w_ - 1;
+  if (row >= n_tiles_h_)  // also catches unsigned underflow below 0
+    row = feature.getYDist() < 0 ? 0 : n_tiles_h_ - 1;
+
   // Store these in feature
   feature.setTile(row, col);
 }
