@@ -89,7 +89,9 @@ void Optimizer::optimizeParameters(const cv::Mat &event_frame, EkltPatch &patch,
 
   problem.AddResidualBlock(cost_function, nullptr, p0, v0);
 
+  auto solve_start = profiler::now();
   ceres::Solve(solver_options, &problem, &summary);
+  auto solve_stop = profiler::now();
 
   // update patch according to new optimizer
   cv::Mat camera_warp;
@@ -104,7 +106,15 @@ void Optimizer::optimizeParameters(const cv::Mat &event_frame, EkltPatch &patch,
   patch.updateCenter(t);
 
   if (perf_logger_)
-    perf_logger_->optimizations_csv.addRow(start, profiler::now(), summary.iterations.size(), summary.final_cost);
+    perf_logger_->optimizations_csv.addRow(start, profiler::now(), summary.iterations.size(), summary.final_cost,
+                                           solve_start, solve_stop,
+                                           summary.preprocessor_time_in_seconds, summary.minimizer_time_in_seconds,
+                                           summary.postprocessor_time_in_seconds, summary.total_time_in_seconds,
+                                           summary.jacobian_evaluation_time_in_seconds,
+                                           summary.residual_evaluation_time_in_seconds,
+                                           summary.linear_solver_time_in_seconds,
+                                           summary.num_jacobian_evaluations, summary.num_residual_evaluations,
+                                           summary.num_linear_solves);
 }
 
 void Optimizer::setPerfLogger(const EkltPerformanceLoggerPtr &perf_logger) {

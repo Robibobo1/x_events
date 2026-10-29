@@ -36,7 +36,9 @@ namespace x {
 namespace x {
 
   using EventsCsv = CsvWriter<profiler::timestamp_t, profiler::timestamp_t>;
-  using OptimizationsCsv = CsvWriter<profiler::timestamp_t, profiler::timestamp_t, int, double>;
+  using OptimizationsCsv = CsvWriter<profiler::timestamp_t, profiler::timestamp_t, int, double,
+                                     profiler::timestamp_t, profiler::timestamp_t,
+                                     double, double, double, double, double, double, double, int, int, int>;
   using EventTracksInterpolation = CsvWriter<int, double, double, double>;
   using EventTracksCSV = CsvWriter<int, double, double, double>;
   using EKLTTracksCSV = CsvWriter<profiler::timestamp_t, int, EkltTrackUpdateType, double, double, double, double>;
@@ -58,7 +60,14 @@ namespace x {
   struct EkltPerformanceLogger {
 
     explicit EkltPerformanceLogger(const fs::path & path)
-     : optimizations_csv(path / "optimizations.csv", {"ts_start", "ts_stop", "num_iterations", "final_cost"})
+     // ts_solve_start/stop bracket ceres::Solve; the *_time columns are Ceres' own Solver::Summary timings in seconds
+     : optimizations_csv(path / "optimizations.csv", {"ts_start", "ts_stop", "num_iterations", "final_cost",
+                                                      "ts_solve_start", "ts_solve_stop",
+                                                      "preprocessor_time", "minimizer_time", "postprocessor_time",
+                                                      "total_time", "jacobian_evaluation_time",
+                                                      "residual_evaluation_time", "linear_solver_time",
+                                                      "num_jacobian_evaluations", "num_residual_evaluations",
+                                                      "num_linear_solves"})
      , eklt_tracks_csv(path / "eklt_tracks.csv", {"ts", "id", "update_type", "patch_t_current", "center_x", "center_y", "flow_angle"}) {}
 
     OptimizationsCsv optimizations_csv;
