@@ -2,11 +2,38 @@
 #include <x/eklt/optimizer.h>
 #include <easy/profiler.h>
 
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
 #include <utility>
 #include <x/eklt/utils.h>
 
 
 using namespace x;
+
+namespace {
+
+/**
+ * @brief Evaluates the original cost function once and writes its residuals and its Jacobian as one row per residual:
+ * d/dtheta, d/dtx, d/dty, d/dphi.
+ */
+void evaluateReference(const ceres::CostFunction &cost_function, const double p[3], const double v[1],
+                       double *residuals, double *jacobian) {
+  std::vector<double> J_p(dump::kNumPixels * 3), J_v(dump::kNumPixels);
+  const double *parameters[] = {p, v};
+  double *jacobians[] = {J_p.data(), J_v.data()};
+  cost_function.Evaluate(parameters, residuals, jacobians);
+  for (int i = 0; i < dump::kNumPixels; ++i) {
+    jacobian[i * 4 + 0] = J_p[i * 3 + 0];
+    jacobian[i * 4 + 1] = J_p[i * 3 + 1];
+    jacobian[i * 4 + 2] = J_p[i * 3 + 2];
+    jacobian[i * 4 + 3] = J_v[i];
+  }
+}
+
+}  // namespace
 
 Optimizer::Optimizer(Params params, EkltPerformanceLoggerPtr perf_logger)
   : params_(std::move(params)), perf_logger_(std::move(perf_logger)), patch_size_(params_.eklt_patch_size) {
@@ -21,6 +48,11 @@ Optimizer::Optimizer(Params params, EkltPerformanceLoggerPtr perf_logger)
   solver_options.logging_type = ceres::SILENT;
   solver_options.max_num_iterations = params_.eklt_max_num_iterations;
   solver_options.use_nonmonotonic_steps = true;
+
+  if (const char *every = std::getenv("EKLT_DUMP_EVERY"))
+    dump_every_ = std::max(0, std::atoi(every));
+  if (dump_every_ > 0)
+    std::cout << "EKLT optimizer dump: every " << dump_every_ << "-th solve" << std::endl;
 }
 
 
@@ -87,11 +119,28 @@ void Optimizer::optimizeParameters(const cv::Mat &event_frame, EkltPatch &patch,
                                      &event_frame,
                                      optimizer_data_[patch.t_init_].grad_interp_);
 
+  // optional dump (golden vectors): copy the inputs of every N-th solve
+  std::unique_ptr<dump::Record> dump_record;
+  std::vector<dump::Evaluation> dump_evals;
+  const ceres::CostFunction *original_cost_function = cost_function;
+  if (dump_every_ > 0 && perf_logger_ && solve_index_ % dump_every_ == 0) {
+    if (event_frame.rows != dump::kPatchSize || event_frame.cols != dump::kPatchSize) {
+      std::cerr << "EKLT optimizer dump disabled: it needs eklt_patch_size = " << dump::kPatchSize << std::endl;
+      dump_every_ = 0;
+    } else {
+      dump_record = startDumpRecord(event_frame, patch, t, p0, v0);
+    }
+  }
+  ++solve_index_;
+
   problem.AddResidualBlock(cost_function, nullptr, p0, v0);
 
   auto solve_start = profiler::now();
   ceres::Solve(solver_options, &problem, &summary);
   auto solve_stop = profiler::now();
+
+  if (dump_record)
+    finishDumpRecord(*dump_record, *original_cost_function, p0, v0, summary, dump_evals);
 
   // update patch according to new optimizer
   cv::Mat camera_warp;
@@ -119,6 +168,90 @@ void Optimizer::optimizeParameters(const cv::Mat &event_frame, EkltPatch &patch,
 
 void Optimizer::setPerfLogger(const EkltPerformanceLoggerPtr &perf_logger) {
   perf_logger_ = perf_logger;
+}
+
+std::unique_ptr<dump::Record> Optimizer::startDumpRecord(const cv::Mat &event_frame, const EkltPatch &patch, double t,
+                                                         const double p0[3], const double v0[1]) {
+  auto r = std::make_unique<dump::Record>();
+  std::memset(r.get(), 0, sizeof(dump::Record));
+
+  r->solve_index = solve_index_;
+  r->patch_id = patch.getId();
+  r->t = t;
+  r->t_init = patch.t_init_;
+  r->center[0] = patch.getCenter().x;
+  r->center[1] = patch.getCenter().y;
+  r->init_center[0] = patch.init_center_.x;
+  r->init_center[1] = patch.init_center_.y;
+  r->params_init[0] = p0[0];
+  r->params_init[1] = p0[1];
+  r->params_init[2] = p0[2];
+  r->params_init[3] = v0[0];
+
+  for (int y = 0; y < dump::kPatchSize; ++y)
+    for (int x = 0; x < dump::kPatchSize; ++x)
+      r->event_frame[y * dump::kPatchSize + x] = event_frame.at<double>(y, x);
+  r->event_frame_norm = cv::norm(event_frame);
+
+  // window of the template gradient centered on the feature position in the template frame, where the warped patch
+  // is sampled; outside the image the nearest border value is repeated, as ceres::Grid2D does
+  const OptimizerDatum &datum = optimizer_data_.at(patch.t_init_);
+  r->image_rows = datum.rows_;
+  r->image_cols = datum.cols_;
+  r->window_row0 = static_cast<int>(std::lround(patch.init_center_.y)) - dump::kWindowSize / 2;
+  r->window_col0 = static_cast<int>(std::lround(patch.init_center_.x)) - dump::kWindowSize / 2;
+  for (int wy = 0; wy < dump::kWindowSize; ++wy) {
+    const int row = std::min(std::max(r->window_row0 + wy, 0), datum.rows_ - 1);
+    for (int wx = 0; wx < dump::kWindowSize; ++wx) {
+      const int col = std::min(std::max(r->window_col0 + wx, 0), datum.cols_ - 1);
+      for (int c = 0; c < 2; ++c)
+        r->grad_window[2 * (wy * dump::kWindowSize + wx) + c] = datum.grad_[2 * (row * datum.cols_ + col) + c];
+    }
+  }
+  return r;
+}
+
+void Optimizer::finishDumpRecord(dump::Record &r, const ceres::CostFunction &cost_function, const double p[3],
+                                 const double v[1], const ceres::Solver::Summary &summary,
+                                 const std::vector<dump::Evaluation> &evals) {
+  r.params_final[0] = p[0];
+  r.params_final[1] = p[1];
+  r.params_final[2] = p[2];
+  r.params_final[3] = v[0];
+  r.initial_cost = summary.initial_cost;
+  r.final_cost = summary.final_cost;
+  r.num_iterations = static_cast<int32_t>(summary.iterations.size());
+  r.termination_type = static_cast<int32_t>(summary.termination_type);
+  r.num_jacobian_evaluations = summary.num_jacobian_evaluations;
+  r.num_residual_evaluations = summary.num_residual_evaluations;
+
+  r.num_evals = static_cast<int32_t>(evals.size());
+  std::copy_n(evals.begin(), std::min<size_t>(evals.size(), dump::kMaxEvals), r.evals);
+
+  // reference outputs of the original cost function at the starting and at the final parameters
+  evaluateReference(cost_function, r.params_init, r.params_init + 3, r.residuals_init, r.jacobian_init);
+  evaluateReference(cost_function, p, v, r.residuals_final, r.jacobian_final);
+
+  if (!dump_file_.is_open()) {
+    const fs::path path = perf_logger_->output_path / "optimizer_dump.bin";
+    dump_file_.open(path.string(), std::ios::binary | std::ios::trunc);
+    if (!dump_file_) {
+      std::cerr << "EKLT optimizer dump: cannot open " << path << ", dump disabled" << std::endl;
+      dump_every_ = 0;
+      return;
+    }
+    dump::Header h{};
+    std::memcpy(h.magic, "EKLTDUMP", 8);
+    h.version = dump::kVersion;
+    h.header_size = sizeof(dump::Header);
+    h.record_size = sizeof(dump::Record);
+    h.patch_size = dump::kPatchSize;
+    h.window_size = dump::kWindowSize;
+    h.max_evals = dump::kMaxEvals;
+    dump_file_.write(reinterpret_cast<const char *>(&h), sizeof(h));
+  }
+  dump_file_.write(reinterpret_cast<const char *>(&r), sizeof(r));
+  dump_file_.flush();  // the program does not always shut down cleanly (see evaluate.cpp), keep every record on disk
 }
 
 

@@ -1,7 +1,12 @@
 #pragma once
 
+#include <fstream>
+#include <memory>
+#include <vector>
+
 #include <x/eklt/error.h>
 #include <x/eklt/eklt_patch.h>
+#include <x/eklt/optimizer_dump.h>
 #include <x/eklt/types.h>
 
 
@@ -49,6 +54,20 @@ namespace x {
     OptimizerData optimizer_data_;
 
     int patch_size_;
+
+    // Optional dump of every N-th solve (golden vectors), enabled by the environment variable EKLT_DUMP_EVERY=N.
+    // Record format in optimizer_dump.h. The file optimizer_dump.bin is written next to optimizations.csv.
+    int dump_every_ = 0;
+    int64_t solve_index_ = 0;
+    std::ofstream dump_file_;
+
+  private:
+    std::unique_ptr<dump::Record> startDumpRecord(const cv::Mat &event_frame, const EkltPatch &patch, double t,
+                                                  const double p0[3], const double v0[1]);
+
+    void finishDumpRecord(dump::Record &record, const ceres::CostFunction &cost_function, const double p[3],
+                          const double v[1], const ceres::Solver::Summary &summary,
+                          const std::vector<dump::Evaluation> &evals);
   };
 
 }
