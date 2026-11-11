@@ -16,6 +16,40 @@ using namespace x;
 namespace {
 
 /**
+ * @brief Passes every call through to the original cost function, unchanged, and notes the parameters and the cost
+ * of each evaluation. Used only for the solves written to the optimizer dump (EKLT_DUMP_EVERY).
+ */
+class RecordingCostFunction : public ceres::CostFunction {
+ public:
+  RecordingCostFunction(ceres::CostFunction *original, std::vector<dump::Evaluation> *evals)
+    : original_(original), evals_(evals) {
+    set_num_residuals(original_->num_residuals());
+    *mutable_parameter_block_sizes() = original_->parameter_block_sizes();
+  }
+
+  bool Evaluate(double const *const *parameters, double *residuals, double **jacobians) const override {
+    const bool ok = original_->Evaluate(parameters, residuals, jacobians);
+
+    dump::Evaluation e{};
+    e.params[0] = parameters[0][0];
+    e.params[1] = parameters[0][1];
+    e.params[2] = parameters[0][2];
+    e.params[3] = parameters[1][0];
+    e.with_jacobian = jacobians != nullptr ? 1.0 : 0.0;
+    double sum_sq = 0;
+    for (int i = 0; i < num_residuals(); ++i)
+      sum_sq += residuals[i] * residuals[i];
+    e.cost = 0.5 * sum_sq;
+    evals_->push_back(e);
+    return ok;
+  }
+
+ private:
+  std::unique_ptr<ceres::CostFunction> original_;  // owned, deleted with this wrapper by ceres::Problem
+  std::vector<dump::Evaluation> *evals_;
+};
+
+/**
  * @brief Evaluates the original cost function once and writes its residuals and its Jacobian as one row per residual:
  * d/dtheta, d/dtx, d/dty, d/dphi.
  */
@@ -119,7 +153,7 @@ void Optimizer::optimizeParameters(const cv::Mat &event_frame, EkltPatch &patch,
                                      &event_frame,
                                      optimizer_data_[patch.t_init_].grad_interp_);
 
-  // optional dump (golden vectors): copy the inputs of every N-th solve
+  // optional dump (golden vectors): wrap the cost function to note every evaluation of this solve
   std::unique_ptr<dump::Record> dump_record;
   std::vector<dump::Evaluation> dump_evals;
   const ceres::CostFunction *original_cost_function = cost_function;
@@ -129,6 +163,7 @@ void Optimizer::optimizeParameters(const cv::Mat &event_frame, EkltPatch &patch,
       dump_every_ = 0;
     } else {
       dump_record = startDumpRecord(event_frame, patch, t, p0, v0);
+      cost_function = new RecordingCostFunction(cost_function, &dump_evals);
     }
   }
   ++solve_index_;
