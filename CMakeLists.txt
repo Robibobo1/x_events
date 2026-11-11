@@ -179,3 +179,7 @@ target_link_libraries(x
   ${catkin_LIBRARIES}
   ${easy_profiler_catkin_LIBRARIES}
 )
+
+# Validation level 1 of the EKLT cost function on the golden vectors (optimizer_dump.bin)
+add_executable(eklt_cost_check test/eklt_cost_check.cpp)
+target_link_libraries(eklt_cost_check x)
