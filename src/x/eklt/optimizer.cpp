@@ -99,6 +99,17 @@ Optimizer::Optimizer(Params params, EkltPerformanceLoggerPtr perf_logger)
       throw std::invalid_argument("EKLT_COST=" + name + ": expected autodiff or analytic");
     std::cout << "EKLT cost function derivatives: " << name << std::endl;
   }
+
+  if (const char *perturb = std::getenv("EKLT_PERTURB")) {
+    const std::string dir(perturb);
+    if (dir == "up")
+      perturb_ = 1;
+    else if (dir == "down")
+      perturb_ = -1;
+    else
+      throw std::invalid_argument("EKLT_PERTURB=" + dir + ": expected up or down");
+    std::cout << "EKLT optimizer: starting values of every solve moved one last bit " << dir << std::endl;
+  }
 }
 
 
@@ -157,6 +168,14 @@ void Optimizer::optimizeParameters(const cv::Mat &event_frame, EkltPatch &patch,
   double p0[3];
   ErrorRotation::getP0(p0, patch.warping_);
   double v0[] = {patch.flow_angle_};
+
+  // rounding control: move the starting values by one last bit (next representable double up or down)
+  if (perturb_ != 0) {
+    const double to = perturb_ > 0 ? HUGE_VAL : -HUGE_VAL;
+    for (double &p : p0)
+      p = std::nextafter(p, to);
+    v0[0] = std::nextafter(v0[0], to);
+  }
 
   // create cost functor that depends on the event frame, and current and initial
   // patch location

@@ -66,6 +66,10 @@ namespace x {
     // hand-written). With a dump, the stored reference outputs come from the cost function in use.
     bool analytic_cost_ = false;
 
+    // Rounding control (branch rounding-control only): EKLT_PERTURB=up|down moves the starting values of every solve
+    // by one last bit, to measure how much EKLT-VIO changes from rounding alone. 0 = off.
+    int perturb_ = 0;
+
   private:
     std::unique_ptr<dump::Record> startDumpRecord(const cv::Mat &event_frame, const EkltPatch &patch, double t,
                                                   const double p0[3], const double v0[1]);
