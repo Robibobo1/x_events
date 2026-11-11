@@ -7,7 +7,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <stdexcept>
+#include <string>
 #include <utility>
+#include <x/eklt/error_analytic.h>
 #include <x/eklt/utils.h>
 
 
@@ -87,6 +90,15 @@ Optimizer::Optimizer(Params params, EkltPerformanceLoggerPtr perf_logger)
     dump_every_ = std::max(0, std::atoi(every));
   if (dump_every_ > 0)
     std::cout << "EKLT optimizer dump: every " << dump_every_ << "-th solve" << std::endl;
+
+  if (const char *cost = std::getenv("EKLT_COST")) {
+    const std::string name(cost);
+    if (name == "analytic")
+      analytic_cost_ = true;
+    else if (name != "autodiff")  // stop rather than silently run the default on a typo
+      throw std::invalid_argument("EKLT_COST=" + name + ": expected autodiff or analytic");
+    std::cout << "EKLT cost function derivatives: " << name << std::endl;
+  }
 }
 
 
@@ -148,10 +160,17 @@ void Optimizer::optimizeParameters(const cv::Mat &event_frame, EkltPatch &patch,
 
   // create cost functor that depends on the event frame, and current and initial
   // patch location
-  auto cost_function = Generator::Create(patch.getCenter(),
-                                     patch.init_center_,
-                                     &event_frame,
-                                     optimizer_data_[patch.t_init_].grad_interp_);
+  ceres::CostFunction *cost_function;
+  if (analytic_cost_)
+    cost_function = ErrorRotationAnalytic::Create(patch.getCenter(),
+                                                  patch.init_center_,
+                                                  &event_frame,
+                                                  optimizer_data_[patch.t_init_].grad_interp_);
+  else
+    cost_function = Generator::Create(patch.getCenter(),
+                                      patch.init_center_,
+                                      &event_frame,
+                                      optimizer_data_[patch.t_init_].grad_interp_);
 
   // optional dump (golden vectors): wrap the cost function to note every evaluation of this solve
   std::unique_ptr<dump::Record> dump_record;

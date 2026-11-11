@@ -61,6 +61,11 @@ namespace x {
     int64_t solve_index_ = 0;
     std::ofstream dump_file_;
 
+    // Derivatives of the cost function, chosen by the environment variable EKLT_COST: autodiff (default, Ceres'
+    // automatic differentiation of ErrorRotation, the published code) or analytic (ErrorRotationAnalytic,
+    // hand-written). With a dump, the stored reference outputs come from the cost function in use.
+    bool analytic_cost_ = false;
+
   private:
     std::unique_ptr<dump::Record> startDumpRecord(const cv::Mat &event_frame, const EkltPatch &patch, double t,
                                                   const double p0[3], const double v0[1]);
