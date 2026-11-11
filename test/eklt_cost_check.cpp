@@ -112,7 +112,7 @@ bool check(const std::string &path, double tolerance) {
   }
   in.seekg(h.header_size);
 
-  // the original cost function rebuilt from the record, against the stored values (checks the test itself)
+  // check of the checker: the original cost function on the rebuilt inputs must give exactly the stored outputs
   Stat self_r, self_J, self_cost;
   // hand-written derivatives against the stored values, at the start and the end of each solve
   Stat end_r, end_J[K];
@@ -181,7 +181,7 @@ bool check(const std::string &path, double tolerance) {
 
   std::printf("%s\n%ld records, %ld cost function calls\n", path.c_str(), records, calls);
   std::printf("\nRelative difference                      median        max\n");
-  std::printf("  The test itself: original cost function rebuilt from the records vs stored (expected 0)\n");
+  std::printf("  Check of the checker: original cost function on the rebuilt inputs vs stored (must be 0)\n");
   print("residuals", self_r);
   print("Jacobian", self_J);
   print("cost", self_cost);
