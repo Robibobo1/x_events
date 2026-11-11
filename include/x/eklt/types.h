@@ -61,7 +61,8 @@ namespace x {
 
     explicit EkltPerformanceLogger(const fs::path & path)
      // ts_solve_start/stop bracket ceres::Solve; the *_time columns are Ceres' own Solver::Summary timings in seconds
-     : optimizations_csv(path / "optimizations.csv", {"ts_start", "ts_stop", "num_iterations", "final_cost",
+     : output_path(path)
+     , optimizations_csv(path / "optimizations.csv", {"ts_start", "ts_stop", "num_iterations", "final_cost",
                                                       "ts_solve_start", "ts_solve_stop",
                                                       "preprocessor_time", "minimizer_time", "postprocessor_time",
                                                       "total_time", "jacobian_evaluation_time",
@@ -70,6 +71,7 @@ namespace x {
                                                       "num_linear_solves"})
      , eklt_tracks_csv(path / "eklt_tracks.csv", {"ts", "id", "update_type", "patch_t_current", "center_x", "center_y", "flow_angle"}) {}
 
+    fs::path output_path;  // also used for the optional optimizer dump (optimizer_dump.h)
     OptimizationsCsv optimizations_csv;
     EKLTTracksCSV eklt_tracks_csv;
   };
@@ -102,6 +104,8 @@ namespace x {
       grad_grid_ = new Grid(grad_.data(), 0, img.rows, 0, img.cols);
       grad_interp_ = new Interpolator(*grad_grid_);
       ref_counter_ = num_patches;
+      rows_ = img.rows;
+      cols_ = img.cols;
     }
 
     void clear() {
@@ -113,6 +117,8 @@ namespace x {
     Grid *grad_grid_;
     Interpolator *grad_interp_;
     int ref_counter_;
+    int rows_ = 0;  // size of the gradient grid
+    int cols_ = 0;
   };
 
   using OptimizerData = std::map<double, OptimizerDatum>;
