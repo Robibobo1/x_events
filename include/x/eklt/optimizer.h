@@ -64,11 +64,13 @@ namespace x {
 
     // Cost function, chosen by the environment variable EKLT_COST: autodiff (default, Ceres' automatic
     // differentiation of ErrorRotation, the published code), analytic (ErrorRotationAnalytic, hand-written
-    // derivatives) or kernel (ErrorRotationKernel<float>, the cost kernel for HLS on a window of the gradient). With a
+    // derivatives), kernel (ErrorRotationKernel<float>, the cost kernel for HLS on a window of the gradient) or
+    // kernel_double (the same kernel in double, to tell the effect of float from the effect of the window). With a
     // dump, the stored reference outputs come from the cost function in use.
-    enum class Cost { Autodiff, Analytic, Kernel };
+    enum class Cost { Autodiff, Analytic, Kernel, KernelDouble };
     Cost cost_ = Cost::Autodiff;
-    // EKLT_COST=kernel: pixels the kernel read outside its window, over the whole run, printed at the end
+    // EKLT_COST=kernel or kernel_double: pixels the kernel read outside its window, over the whole run, printed at the
+    // end
     KernelWindowCounter kernel_window_;
 
   private:

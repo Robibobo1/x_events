@@ -97,8 +97,10 @@ Optimizer::Optimizer(Params params, EkltPerformanceLoggerPtr perf_logger)
       cost_ = Cost::Analytic;
     else if (name == "kernel")
       cost_ = Cost::Kernel;
+    else if (name == "kernel_double")
+      cost_ = Cost::KernelDouble;
     else if (name != "autodiff")  // stop rather than silently run the default on a typo
-      throw std::invalid_argument("EKLT_COST=" + name + ": expected autodiff, analytic or kernel");
+      throw std::invalid_argument("EKLT_COST=" + name + ": expected autodiff, analytic, kernel or kernel_double");
     std::cout << "EKLT cost function: " << name << std::endl;
   }
 }
@@ -109,7 +111,7 @@ void Optimizer::setParams(const Params &params) {
 }
 
 Optimizer::~Optimizer() {
-  if (cost_ == Cost::Kernel)
+  if (cost_ == Cost::Kernel || cost_ == Cost::KernelDouble)
     std::cout << "EKLT cost kernel: " << kernel_window_.pixels_outside << " pixels read outside the "
               << kernel::kWindowSize << "x" << kernel::kWindowSize << " window, in " << kernel_window_.calls_outside
               << " of " << kernel_window_.calls << " calls" << std::endl;
@@ -178,6 +180,12 @@ void Optimizer::optimizeParameters(const cv::Mat &event_frame, EkltPatch &patch,
                                                        &event_frame,
                                                        *optimizer_data_[patch.t_init_].grad_grid_,
                                                        &kernel_window_);
+  else if (cost_ == Cost::KernelDouble)
+    cost_function = ErrorRotationKernel<double>::Create(patch.getCenter(),
+                                                        patch.init_center_,
+                                                        &event_frame,
+                                                        *optimizer_data_[patch.t_init_].grad_grid_,
+                                                        &kernel_window_);
   else
     cost_function = Generator::Create(patch.getCenter(),
                                       patch.init_center_,
