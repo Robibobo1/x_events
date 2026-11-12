@@ -106,9 +106,17 @@ Optimizer::Optimizer(Params params, EkltPerformanceLoggerPtr perf_logger)
       perturb_ = 1;
     else if (dir == "down")
       perturb_ = -1;
+    else if (dir.rfind("rel:", 0) == 0 && dir.find(':', 4) != std::string::npos) {
+      const size_t colon = dir.find(':', 4);
+      perturb_rel_ = std::stod(dir.substr(4, colon - 4));
+      perturb_seed_ = std::stoull(dir.substr(colon + 1));
+    } else
+      throw std::invalid_argument("EKLT_PERTURB=" + dir + ": expected up, down or rel:<size>:<seed>");
+    if (perturb_rel_ > 0)
+      std::cout << "EKLT optimizer: starting values of every solve moved by " << perturb_rel_ << " x max(|value|, 1), seed "
+                << perturb_seed_ << std::endl;
     else
-      throw std::invalid_argument("EKLT_PERTURB=" + dir + ": expected up or down");
-    std::cout << "EKLT optimizer: starting values of every solve moved one last bit " << dir << std::endl;
+      std::cout << "EKLT optimizer: starting values of every solve moved one last bit " << dir << std::endl;
   }
 }
 
@@ -175,6 +183,18 @@ void Optimizer::optimizeParameters(const cv::Mat &event_frame, EkltPatch &patch,
     for (double &p : p0)
       p = std::nextafter(p, to);
     v0[0] = std::nextafter(v0[0], to);
+  }
+  // rounding control of chosen size: each starting value up or down, direction from a hash of (seed, solve, parameter)
+  if (perturb_rel_ > 0) {
+    double *values[4] = {&p0[0], &p0[1], &p0[2], &v0[0]};
+    for (uint64_t k = 0; k < 4; ++k) {
+      uint64_t h = perturb_seed_ * 0x9E3779B97F4A7C15ULL + static_cast<uint64_t>(solve_index_) * 4 + k;  // splitmix64
+      h = (h ^ (h >> 30)) * 0xBF58476D1CE4E5B9ULL;
+      h = (h ^ (h >> 27)) * 0x94D049BB133111EBULL;
+      h ^= h >> 31;
+      const double sign = (h & 1) ? 1.0 : -1.0;
+      *values[k] += sign * perturb_rel_ * std::max(std::abs(*values[k]), 1.0);
+    }
   }
 
   // create cost functor that depends on the event frame, and current and initial

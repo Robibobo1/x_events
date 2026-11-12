@@ -69,6 +69,10 @@ namespace x {
     // Rounding control (branch rounding-control only): EKLT_PERTURB=up|down moves the starting values of every solve
     // by one last bit, to measure how much EKLT-VIO changes from rounding alone. 0 = off.
     int perturb_ = 0;
+    // EKLT_PERTURB=rel:<size>:<seed> moves each starting value up or down by size * max(|value|, 1), the direction
+    // drawn from (seed, solve, parameter): a nudge of chosen size, repeatable for a seed. 0 = off.
+    double perturb_rel_ = 0;
+    uint64_t perturb_seed_ = 0;
 
   private:
     std::unique_ptr<dump::Record> startDumpRecord(const cv::Mat &event_frame, const EkltPatch &patch, double t,
