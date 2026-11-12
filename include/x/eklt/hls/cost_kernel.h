@@ -19,7 +19,7 @@ constexpr int kPatchSize = 19;                       // EKLT patch, eklt_patch_s
 constexpr int kHalfSize = (kPatchSize - 1) / 2;
 constexpr int kNumPixels = kPatchSize * kPatchSize;  // = number of residuals
 constexpr int kNumParams = 4;                        // theta, tx, ty, phi
-constexpr int kWindowSize = 40;                      // template gradient window, kWindowSize x kWindowSize x (Ix, Iy)
+constexpr int kWindowSize = 48;                      // template gradient window, kWindowSize x kWindowSize x (Ix, Iy)
 
 // ceres::CubicHermiteSpline for one value. The cubic goes through p1 at s = 0 and p2 at s = 1, with the slopes
 // (p2 - p0) / 2 and (p3 - p1) / 2 there. Returns its value f and its slope dfds at s, same expressions as Ceres.

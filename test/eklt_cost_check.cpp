@@ -174,7 +174,7 @@ bool check(const std::string &path, double tolerance, double kernel_tolerance) {
     std::unique_ptr<ceres::CostFunction> original(Generator::Create(center, init_center, &event_frame, &interp));
     std::unique_ptr<ceres::CostFunction> analytic(
         ErrorRotationAnalytic::Create(center, init_center, &event_frame, &interp));
-    // the kernel's 40x40 window is copied from this grid, it lies inside the stored 48x48 window
+    // the kernel's window is copied from this grid: same size and place as the stored window
     std::unique_ptr<ceres::CostFunction> kernel_d(
         ErrorRotationKernel<double>::Create(center, init_center, &event_frame, grid, &kernel_double.window));
     std::unique_ptr<ceres::CostFunction> kernel_f(
