@@ -1,13 +1,17 @@
 // Validation level 1 of the EKLT cost function on the golden vectors (optimizer_dump.bin, format in
 // x/eklt/optimizer_dump.h). For every recorded solve, the inputs of the cost function are rebuilt from the record
 // alone, then the original cost function (ErrorRotation, Ceres' automatic derivatives) and the one with hand-written
-// derivatives (ErrorRotationAnalytic) are evaluated and compared with the outputs the original code stored.
+// derivatives (ErrorRotationAnalytic) are evaluated and compared with the outputs the original code stored. The cost
+// kernel for HLS (x/eklt/hls/cost_kernel.h, through its Ceres wrapper ErrorRotationKernel) is compared with the
+// original in the same way, built in double (same numbers expected, up to rounding) and in float.
 //
-//   eklt_cost_check <optimizer_dump.bin>... [--tolerance 1e-9]
+//   eklt_cost_check <optimizer_dump.bin>... [--tolerance 1e-9] [--kernel-tolerance 2e-4]
 //
 // Relative difference of a vector (the residuals, or one column of the Jacobian): largest absolute difference divided
 // by the largest absolute reference value. Of a cost: absolute difference divided by the reference cost.
-// Returns 0 if every relative difference of the hand-written version stays below the tolerance.
+// Returns 0 if every relative difference of the hand-written version and of the kernel in double stays below the
+// tolerance, every one of the kernel in float below the kernel tolerance, and the kernel never reads outside its
+// window.
 
 #include <algorithm>
 #include <cmath>
@@ -18,12 +22,14 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <opencv2/core/core.hpp>
 
 #include <x/eklt/error.h>
 #include <x/eklt/error_analytic.h>
+#include <x/eklt/error_kernel.h>
 #include <x/eklt/optimizer_dump.h>
 
 using namespace x;
@@ -101,8 +107,33 @@ void print(const char *name, const Stat &s) {
   std::printf("    %-12s %9.1e  %9.1e\n", name, s.median(), s.max());
 }
 
-// Returns true if the hand-written derivatives pass on every record of the file
-bool check(const std::string &path, double tolerance) {
+// one version of the cost kernel against the original, at every recorded call
+struct KernelStats {
+  const char *name;
+  Stat r, J[K], cost;
+  KernelWindowCounter window;  // over every evaluation of this version, two per recorded call
+
+  double worst() const {
+    double w = std::max(r.max(), cost.max());
+    for (int k = 0; k < K; ++k)
+      w = std::max(w, J[k].max());
+    return w;
+  }
+
+  void printAll(long calls) const {
+    std::printf("  Kernel in %s vs original derivatives, at every recorded call (%ld points)\n", name, calls);
+    print("residuals", r);
+    for (int k = 0; k < K; ++k)
+      print(kColumn[k], J[k]);
+    std::printf("  Kernel in %s, cost of every call vs stored (with or without Jacobian, as Ceres asked)\n", name);
+    print("cost", cost);
+    std::printf("    pixels read outside the %dx%d window: %ld, in %ld of %ld evaluations\n", kernel::kWindowSize,
+                kernel::kWindowSize, window.pixels_outside, window.calls_outside, window.calls);
+  }
+};
+
+// Returns true if the hand-written derivatives and the kernel pass on every record of the file
+bool check(const std::string &path, double tolerance, double kernel_tolerance) {
   std::ifstream in(path, std::ios::binary);
   dump::Header h{};
   if (!in.read(reinterpret_cast<char *>(&h), sizeof(h)) || std::memcmp(h.magic, "EKLTDUMP", 8) != 0 ||
@@ -121,10 +152,12 @@ bool check(const std::string &path, double tolerance) {
   Stat call_r, call_J[K];
   // hand-written, evaluated as Ceres asked (with or without Jacobian) at every recorded call, against the stored cost
   Stat call_cost;
+  // the cost kernel in double and in float, against the original at every recorded call
+  KernelStats kernel_double{"double"}, kernel_float{"float"};
 
   auto rec = std::make_unique<dump::Record>();
   long records = 0, calls = 0;
-  std::vector<double> r_orig(N), J_orig(N * K), r_an(N), J_an(N * K);
+  std::vector<double> r_orig(N), J_orig(N * K), r_an(N), J_an(N * K), r_k(N), J_k(N * K);
 
   while (in.read(reinterpret_cast<char *>(rec.get()), sizeof(dump::Record))) {
     const dump::Record &r = *rec;
@@ -141,6 +174,13 @@ bool check(const std::string &path, double tolerance) {
     std::unique_ptr<ceres::CostFunction> original(Generator::Create(center, init_center, &event_frame, &interp));
     std::unique_ptr<ceres::CostFunction> analytic(
         ErrorRotationAnalytic::Create(center, init_center, &event_frame, &interp));
+    // the kernel's 40x40 window is copied from this grid, it lies inside the stored 48x48 window
+    std::unique_ptr<ceres::CostFunction> kernel_d(
+        ErrorRotationKernel<double>::Create(center, init_center, &event_frame, grid, &kernel_double.window));
+    std::unique_ptr<ceres::CostFunction> kernel_f(
+        ErrorRotationKernel<float>::Create(center, init_center, &event_frame, grid, &kernel_float.window));
+    const std::pair<const ceres::CostFunction *, KernelStats *> kernels[] = {{kernel_d.get(), &kernel_double},
+                                                                             {kernel_f.get(), &kernel_float}};
 
     // start and end of the solve, where the record holds the residuals and the Jacobian
     const double *params[2] = {r.params_init, r.params_final};
@@ -176,6 +216,18 @@ bool check(const std::string &path, double tolerance) {
       call_r.add(relDiff(r_an.data(), r_orig.data(), N));
       for (int k = 0; k < K; ++k)
         call_J[k].add(relDiff(J_an.data() + k, J_orig.data() + k, N, K));
+
+      // the kernel: cost as Ceres asked, then residuals and Jacobian against the original's (r_orig, J_orig above)
+      for (const auto &version : kernels) {
+        const ceres::CostFunction &f = *version.first;
+        KernelStats &s = *version.second;
+        evaluate(f, ev.params, r_k.data(), with_jacobian ? J_k.data() : nullptr);
+        s.cost.add(relDiffCost(cost(r_k.data()), ev.cost));
+        evaluate(f, ev.params, r_k.data(), J_k.data());
+        s.r.add(relDiff(r_k.data(), r_orig.data(), N));
+        for (int k = 0; k < K; ++k)
+          s.J[k].add(relDiff(J_k.data() + k, J_orig.data() + k, N, K));
+      }
     }
   }
 
@@ -197,33 +249,47 @@ bool check(const std::string &path, double tolerance) {
     print(kColumn[k], call_J[k]);
   std::printf("  Hand-written, cost of every call vs stored (with or without Jacobian, as Ceres asked)\n");
   print("cost", call_cost);
+  kernel_double.printAll(calls);
+  kernel_float.printAll(calls);
 
   double worst = std::max({end_r.max(), call_r.max(), call_cost.max()});
   for (int k = 0; k < K; ++k)
     worst = std::max({worst, end_J[k].max(), call_J[k].max()});
-  const bool pass = records > 0 && worst < tolerance;
-  std::printf("\n%s: largest relative difference of the hand-written derivatives %.1e, tolerance %.0e\n\n",
-              pass ? "PASS" : "FAIL", worst, tolerance);
-  return pass;
+  const bool pass_analytic = records > 0 && worst < tolerance;
+  const bool pass_double = records > 0 && kernel_double.worst() < tolerance;
+  const bool pass_float = records > 0 && kernel_float.worst() < kernel_tolerance;
+  const bool pass_window = kernel_double.window.pixels_outside == 0 && kernel_float.window.pixels_outside == 0;
+  std::printf("\n%s: largest relative difference of the hand-written derivatives %.1e, tolerance %.0e\n",
+              pass_analytic ? "PASS" : "FAIL", worst, tolerance);
+  std::printf("%s: largest relative difference of the kernel in double %.1e, tolerance %.0e\n",
+              pass_double ? "PASS" : "FAIL", kernel_double.worst(), tolerance);
+  std::printf("%s: largest relative difference of the kernel in float %.1e, tolerance %.0e\n",
+              pass_float ? "PASS" : "FAIL", kernel_float.worst(), kernel_tolerance);
+  std::printf("%s: pixels read outside the kernel window %ld\n\n", pass_window ? "PASS" : "FAIL",
+              kernel_double.window.pixels_outside + kernel_float.window.pixels_outside);
+  return pass_analytic && pass_double && pass_float && pass_window;
 }
 
 }  // namespace
 
 int main(int argc, char **argv) {
   std::vector<std::string> paths;
-  double tolerance = 1e-9;
+  double tolerance = 1e-9, kernel_tolerance = 2e-4;
   for (int i = 1; i < argc; ++i) {
     if (std::string(argv[i]) == "--tolerance" && i + 1 < argc)
       tolerance = std::atof(argv[++i]);
+    else if (std::string(argv[i]) == "--kernel-tolerance" && i + 1 < argc)
+      kernel_tolerance = std::atof(argv[++i]);
     else
       paths.emplace_back(argv[i]);
   }
   if (paths.empty()) {
-    std::cerr << "usage: eklt_cost_check <optimizer_dump.bin>... [--tolerance 1e-9]" << std::endl;
+    std::cerr << "usage: eklt_cost_check <optimizer_dump.bin>... [--tolerance 1e-9] [--kernel-tolerance 2e-4]"
+              << std::endl;
     return 2;
   }
   bool pass = true;
   for (const auto &p : paths)
-    pass = check(p, tolerance) && pass;
+    pass = check(p, tolerance, kernel_tolerance) && pass;
   return pass ? 0 : 1;
 }
