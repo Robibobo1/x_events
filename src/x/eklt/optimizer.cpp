@@ -94,10 +94,12 @@ Optimizer::Optimizer(Params params, EkltPerformanceLoggerPtr perf_logger)
   if (const char *cost = std::getenv("EKLT_COST")) {
     const std::string name(cost);
     if (name == "analytic")
-      analytic_cost_ = true;
+      cost_ = Cost::Analytic;
+    else if (name == "kernel")
+      cost_ = Cost::Kernel;
     else if (name != "autodiff")  // stop rather than silently run the default on a typo
-      throw std::invalid_argument("EKLT_COST=" + name + ": expected autodiff or analytic");
-    std::cout << "EKLT cost function derivatives: " << name << std::endl;
+      throw std::invalid_argument("EKLT_COST=" + name + ": expected autodiff, analytic or kernel");
+    std::cout << "EKLT cost function: " << name << std::endl;
   }
 }
 
@@ -107,6 +109,10 @@ void Optimizer::setParams(const Params &params) {
 }
 
 Optimizer::~Optimizer() {
+  if (cost_ == Cost::Kernel)
+    std::cout << "EKLT cost kernel: " << kernel_window_.pixels_outside << " pixels read outside the "
+              << kernel::kWindowSize << "x" << kernel::kWindowSize << " window, in " << kernel_window_.calls_outside
+              << " of " << kernel_window_.calls << " calls" << std::endl;
   for (auto &it : optimizer_data_)
     it.second.clear();
 }
@@ -161,11 +167,17 @@ void Optimizer::optimizeParameters(const cv::Mat &event_frame, EkltPatch &patch,
   // create cost functor that depends on the event frame, and current and initial
   // patch location
   ceres::CostFunction *cost_function;
-  if (analytic_cost_)
+  if (cost_ == Cost::Analytic)
     cost_function = ErrorRotationAnalytic::Create(patch.getCenter(),
                                                   patch.init_center_,
                                                   &event_frame,
                                                   optimizer_data_[patch.t_init_].grad_interp_);
+  else if (cost_ == Cost::Kernel)
+    cost_function = ErrorRotationKernel<float>::Create(patch.getCenter(),
+                                                       patch.init_center_,
+                                                       &event_frame,
+                                                       *optimizer_data_[patch.t_init_].grad_grid_,
+                                                       &kernel_window_);
   else
     cost_function = Generator::Create(patch.getCenter(),
                                       patch.init_center_,

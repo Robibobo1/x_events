@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <x/eklt/error.h>
+#include <x/eklt/error_kernel.h>
 #include <x/eklt/eklt_patch.h>
 #include <x/eklt/optimizer_dump.h>
 #include <x/eklt/types.h>
@@ -61,10 +62,14 @@ namespace x {
     int64_t solve_index_ = 0;
     std::ofstream dump_file_;
 
-    // Derivatives of the cost function, chosen by the environment variable EKLT_COST: autodiff (default, Ceres'
-    // automatic differentiation of ErrorRotation, the published code) or analytic (ErrorRotationAnalytic,
-    // hand-written). With a dump, the stored reference outputs come from the cost function in use.
-    bool analytic_cost_ = false;
+    // Cost function, chosen by the environment variable EKLT_COST: autodiff (default, Ceres' automatic
+    // differentiation of ErrorRotation, the published code), analytic (ErrorRotationAnalytic, hand-written
+    // derivatives) or kernel (ErrorRotationKernel<float>, the cost kernel for HLS on a window of the gradient). With a
+    // dump, the stored reference outputs come from the cost function in use.
+    enum class Cost { Autodiff, Analytic, Kernel };
+    Cost cost_ = Cost::Autodiff;
+    // EKLT_COST=kernel: pixels the kernel read outside its window, over the whole run, printed at the end
+    KernelWindowCounter kernel_window_;
 
   private:
     std::unique_ptr<dump::Record> startDumpRecord(const cv::Mat &event_frame, const EkltPatch &patch, double t,
